@@ -16,9 +16,9 @@ RPC Discovery → HTTP Stream → zstd decompress → custom tar → AppendVec p
 ssp                                     # interactive TUI (setup wizard → processing → query)
 ssp --discover                          # CLI mode: stream full snapshot from fastest RPC node
 ssp --discover --incremental            # CLI mode: stream incremental snapshot (~1GB)
-ssp --download-full                     # download full snapshot to /mnt/snapshot/snapshot.tar.zst
-ssp --download-incremental              # download incremental snapshot to /mnt/snapshot/incremental-snapshot.tar.zst
-ssp --download-full --output my.tar.zst # custom output path
+ssp --download-full                     # download full snapshot to /mnt/snapshot/<upstream-filename>
+ssp --download-incremental              # download incremental snapshot to /mnt/snapshot/<upstream-filename>
+ssp --download-full --output /data/snapshots # custom output directory
 ssp --path snapshot.tar.zst             # CLI mode: parse local file
 ssp --path snapshot.tar.zst --owner <base58> --pubkey <base58>
 ```
@@ -34,7 +34,7 @@ Running `ssp` without flags opens an interactive TUI with source selection, file
 | `--incremental`     | Use incremental snapshot instead of full                         |
 | `--download-full`   | Download full snapshot from fastest RPC node                     |
 | `--download-incremental` | Download incremental snapshot from fastest RPC node        |
-| `--output <file>`   | Output file path for download mode (default: /mnt/snapshot/)     |
+| `--output <dir>`    | Output directory for download mode (default: /mnt/snapshot/, filename keeps upstream name) |
 | `--owner <base58>`  | Filter by account owner                                          |
 | `--pubkey <base58>` | Filter by account pubkey                                         |
 | `--hash <base58>`   | Filter by account hash                                           |

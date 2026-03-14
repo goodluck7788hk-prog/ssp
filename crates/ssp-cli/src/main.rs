@@ -74,7 +74,7 @@ pub struct CliArgs {
     #[arg(long, default_value = "false", conflicts_with = "download_full")]
     download_incremental: bool,
 
-    #[arg(long, help = "Output file path when using download mode")]
+    #[arg(long, help = "Output directory for download mode")]
     output: Option<String>,
 
     #[command(flatten)]
@@ -151,13 +151,19 @@ fn download_snapshot(incremental: bool, output: Option<&str>) -> anyhow::Result<
     let rt = tokio::runtime::Runtime::new()?;
     let source = rt.block_on(rpc::find_fastest_snapshot(None, incremental))?;
 
-    let filename = output.map(ToOwned::to_owned).unwrap_or_else(|| {
+    let source_name = infer_snapshot_filename(&source.url).unwrap_or_else(|| {
         if incremental {
-            "/mnt/snapshot/incremental-snapshot.tar.zst".to_string()
+            "incremental-snapshot.tar.zst".to_string()
         } else {
-            "/mnt/snapshot/snapshot.tar.zst".to_string()
+            "snapshot.tar.zst".to_string()
         }
     });
+
+    let output_dir = output.unwrap_or("/mnt/snapshot");
+    let filename = std::path::Path::new(output_dir)
+        .join(&source_name)
+        .to_string_lossy()
+        .to_string();
 
     eprintln!(
         "downloading {} snapshot from fastest source:\n  {}\n  speed probe: {:.1} MB/s\n  size: {:.1} GB\n  output: {}",
@@ -239,4 +245,13 @@ fn download_snapshot(incremental: bool, output: Option<&str>) -> anyhow::Result<
     );
 
     Ok(())
+}
+
+fn infer_snapshot_filename(url: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    parsed
+        .path_segments()?
+        .filter(|segment| !segment.is_empty())
+        .next_back()
+        .map(ToOwned::to_owned)
 }
