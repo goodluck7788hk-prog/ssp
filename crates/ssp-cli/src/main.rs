@@ -151,13 +151,12 @@ fn download_snapshot(incremental: bool, output: Option<&str>) -> anyhow::Result<
     let rt = tokio::runtime::Runtime::new()?;
     let source = rt.block_on(rpc::find_fastest_snapshot(None, incremental))?;
 
-    let source_name = infer_snapshot_filename(&source.url).unwrap_or_else(|| {
-        if incremental {
-            "incremental-snapshot.tar.zst".to_string()
-        } else {
-            "snapshot.tar.zst".to_string()
-        }
-    });
+    let source_name = infer_snapshot_filename(&source.url).ok_or_else(|| {
+        anyhow::anyhow!(
+            "failed to infer snapshot filename from source url: {} (pass --output <dir> to choose a directory, filename always follows upstream)",
+            source.url
+        )
+    })?;
 
     let output_dir = output.unwrap_or("/mnt/snapshot");
     let filename = std::path::Path::new(output_dir)
