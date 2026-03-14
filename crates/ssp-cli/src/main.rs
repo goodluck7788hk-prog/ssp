@@ -1,6 +1,7 @@
 use clap::Parser;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::sync::Arc;
+use std::time::Instant;
 
 use ssp_core::Pubkey;
 use ssp_core::filters::ResolvedFilters;
@@ -67,12 +68,27 @@ pub struct CliArgs {
     #[arg(long)]
     incremental: bool,
 
+    #[arg(long, default_value = "false", conflicts_with = "download_incremental")]
+    download_full: bool,
+
+    #[arg(long, default_value = "false", conflicts_with = "download_full")]
+    download_incremental: bool,
+
+    #[arg(long, help = "Output directory for download mode")]
+    output: Option<String>,
+
     #[command(flatten)]
     filters: Filters,
 }
 
 fn main() -> anyhow::Result<()> {
     let args = CliArgs::parse();
+
+    if args.download_full || args.download_incremental {
+        let incremental = args.download_incremental;
+        download_snapshot(incremental, args.output.as_deref())?;
+        return Ok(());
+    }
 
     if args.bench {
         let path = args.path.as_deref().expect("--bench requires --path");
@@ -129,4 +145,113 @@ fn main() -> anyhow::Result<()> {
     );
 
     Ok(())
+}
+
+fn download_snapshot(incremental: bool, output: Option<&str>) -> anyhow::Result<()> {
+    let rt = tokio::runtime::Runtime::new()?;
+    let source = rt.block_on(rpc::find_fastest_snapshot(None, incremental))?;
+
+    let source_name = infer_snapshot_filename(&source.url).unwrap_or_else(|| {
+        if incremental {
+            "incremental-snapshot.tar.zst".to_string()
+        } else {
+            "snapshot.tar.zst".to_string()
+        }
+    });
+
+    let output_dir = output.unwrap_or("/mnt/snapshot");
+    let filename = std::path::Path::new(output_dir)
+        .join(&source_name)
+        .to_string_lossy()
+        .to_string();
+
+    eprintln!(
+        "downloading {} snapshot from fastest source:\n  {}\n  speed probe: {:.1} MB/s\n  size: {:.1} GB\n  output: {}",
+        if incremental { "incremental" } else { "full" },
+        source.url,
+        source.speed_mbps,
+        source.size.unwrap_or(0) as f64 / 1_073_741_824.0,
+        filename,
+    );
+
+    let mut resp = reqwest::blocking::Client::builder()
+        .timeout(None)
+        .build()?
+        .get(&source.url)
+        .send()?
+        .error_for_status()?;
+
+    if let Some(parent) = std::path::Path::new(&filename).parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let mut file = std::fs::File::create(&filename)?;
+    let mut buf = vec![0u8; 1024 * 1024];
+    let mut downloaded: u64 = 0;
+    let total = source
+        .size
+        .or_else(|| resp.content_length())
+        .filter(|v| *v > 0);
+    let start = Instant::now();
+    let mut last_report = Instant::now();
+
+    loop {
+        let n = resp.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        file.write_all(&buf[..n])?;
+        downloaded += n as u64;
+
+        if last_report.elapsed().as_secs_f64() >= 1.0 {
+            let secs = start.elapsed().as_secs_f64();
+            let speed = if secs > 0.0 {
+                downloaded as f64 / 1_048_576.0 / secs
+            } else {
+                0.0
+            };
+
+            if let Some(total) = total {
+                let pct = (downloaded as f64 / total as f64 * 100.0).min(100.0);
+                eprintln!(
+                    "downloaded {:.2}/{:.2} GB ({:.1}%) at {:.1} MB/s",
+                    downloaded as f64 / 1_073_741_824.0,
+                    total as f64 / 1_073_741_824.0,
+                    pct,
+                    speed
+                );
+            } else {
+                eprintln!(
+                    "downloaded {:.2} GB at {:.1} MB/s",
+                    downloaded as f64 / 1_073_741_824.0,
+                    speed
+                );
+            }
+
+            last_report = Instant::now();
+        }
+    }
+
+    let elapsed = start.elapsed().as_secs_f64();
+    eprintln!(
+        "download complete: {:.2} GB in {:.1}s ({:.1} MB/s)",
+        downloaded as f64 / 1_073_741_824.0,
+        elapsed,
+        if elapsed > 0.0 {
+            downloaded as f64 / 1_048_576.0 / elapsed
+        } else {
+            0.0
+        }
+    );
+
+    Ok(())
+}
+
+fn infer_snapshot_filename(url: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    parsed
+        .path_segments()?
+        .filter(|segment| !segment.is_empty())
+        .next_back()
+        .map(ToOwned::to_owned)
 }
